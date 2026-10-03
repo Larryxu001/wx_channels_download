@@ -1,15 +1,15 @@
-# Cloudflare Durable Objects 部署能力
+# Cloudflare Durable Objects Deployment
 
-这个包只提供通用的 Durable Objects 编译和部署能力，不包含任何具体 Worker 源码、类名、Binding、Secret 或产品配置。
+This package provides generic Durable Objects build and deployment capabilities. It contains no application-specific Worker source, class names, bindings, secrets, or product configuration.
 
-调用方负责提供：
+The caller is responsible for providing:
 
-- 已可直接上传的 JavaScript 模块；
-- Worker 名称、兼容日期和入口模块名；
-- Durable Object 的 Binding、导出类和存储类型；
-- 需要写入的 Secrets；
-- 是否启用 `workers.dev` 地址。
+- A JavaScript module ready for upload;
+- The Worker name, compatibility date, and entry module name;
+- Durable Object bindings, exported classes, and storage types;
+- Secrets to configure;
+- Whether to enable a `workers.dev` URL.
 
-`Deploy` 将调用方提供的 JavaScript、Durable Object 声明和 Secrets 通过 Cloudflare REST API 上传，不负责编译具体应用源码。
+`Deploy` uploads the caller-provided JavaScript, Durable Object declarations, and secrets through the Cloudflare REST API. It does not compile application-specific source code.
 
-当前 Bridge 桥接/转发服务的原生 JavaScript 源码和 Worker + Pages 部署编排分别位于 `internal/workers/bridge/index.js`、`internal/workers/bridge/deploy.go`；`cmd/deploy.go` 只负责读取 CLI 配置、调用 `bridge.Deploy` 和展示结果。
+The current Bridge forwarding service's native JavaScript source and Worker + Pages deployment orchestration are in `internal/workers/bridge/index.js` and `internal/workers/bridge/deploy.go`, respectively. `cmd/deploy.go` only reads the CLI configuration, calls `bridge.Deploy`, and displays the result.

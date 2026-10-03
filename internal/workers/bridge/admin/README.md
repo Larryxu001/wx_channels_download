@@ -1,10 +1,10 @@
 # Bridge Admin Pages
 
-这个目录是 Bridge 管理页面的独立 Cloudflare Pages 项目。页面与 Durable Objects Worker 分开运行，浏览器只访问 Pages 域名。
+This directory is a standalone Cloudflare Pages project for the Bridge administration interface. The pages run separately from the Durable Objects Worker, and the browser accesses only the Pages domain.
 
-`public` 只保存管理页自身的 HTML、CSS 和 JavaScript 源码。`build.sh` 在部署前创建被 Git 忽略的 `dist`，并从 `frontend/public/timeless` 复制页面需要的 Timeless 运行时，因此仓库中不保存第二份第三方资源。
+`public` contains only the administration interface's own HTML, CSS, and JavaScript source. Before deployment, `build.sh` creates the Git-ignored `dist` directory and copies the required Timeless runtime from `frontend/public/timeless`, avoiding a second copy of third-party assets in the repository.
 
-## 请求结构
+## Request Flow
 
 ```text
 Browser
@@ -12,35 +12,35 @@ Browser
   └── /admin/api/* ── Pages Worker ── BRIDGE Service Binding ── Bridge Worker
 ```
 
-`worker.js` 使用 Pages 高级模式和 HTTP Basic Auth 保护整个项目。用户名固定为 `admin`，密码来自 Pages secret `BRIDGE_ADMIN_TOKEN`。API 代理保留 Authorization header，Worker 会再次验证同一个管理员 Token。
+`worker.js` uses Pages advanced mode and HTTP Basic Auth to protect the entire project. The username is fixed as `admin`, and the password comes from the Pages secret `BRIDGE_ADMIN_TOKEN`. The API proxy preserves the Authorization header, and the Worker validates the same administrator token again.
 
-每张设备卡片通过“日志”按钮打开右侧抽屉，并调用 `/admin/api/devices/:device_id/logs` 查看最近 7 天的设备行为。连接、心跳、调用、响应和系统事件均以结构化日志保存；抽屉支持分类、自动刷新、向前分页和详情展开。敏感字段落库前会脱敏，超大详情会截断。
+Each device card has a “日志” (“Logs”) button that opens the right-hand drawer and calls `/admin/api/devices/:device_id/logs` to display the last seven days of device activity. Connection, heartbeat, call, response, and system events are stored as structured logs. The drawer supports category filters, automatic refresh, pagination into older entries, and expanded details. Sensitive fields are redacted before storage, and oversized details are truncated.
 
-管理页还通过右侧“调用 Token”抽屉调用 `/admin/api/access-tokens`，创建、立即过期和移除外部调用凭证。Token 可以留空自动生成，也可以手动指定；用途或使用人可选填。Token 明文只在创建响应中出现一次，Durable Object 只保存 SHA-256 摘要、可选说明、到期时间和最近使用时间。设备使用的 `BRIDGE_TOKEN` 不会显示在管理页，也不应分发给外部调用者。
+The right-hand “调用 Token” (“Call Tokens”) drawer also uses `/admin/api/access-tokens` to create, immediately expire, and remove external caller credentials. Leave the token blank to generate one automatically, or specify one manually. Its purpose or user is optional. The plaintext token appears only once in the creation response. The Durable Object stores only its SHA-256 digest, optional description, expiry time, and last-used time. The device credential `BRIDGE_TOKEN` is never displayed in the administration interface and must not be distributed to external callers.
 
-## 部署
+## Deployment
 
-在项目根目录执行以下命令，会依次部署 Worker、创建或更新 Pages 项目、配置 Secret 和 Service Binding，并发布管理页面：
+Run the following command from the project root to deploy the Worker, create or update the Pages project, configure secrets and the Service Binding, and publish the administration interface:
 
 ```bash
 go run . deploy bridge
 ```
 
-部署直接复用 `cloudflare.accountId` 和 `cloudflare.apiToken`，Token 需要 Workers Scripts:Edit 和 Pages:Edit 权限，不需要 Wrangler 登录。`BRIDGE_ADMIN_TOKEN` 来自 `bridge.deploy.adminToken`，不会写入 `wrangler.jsonc`、JavaScript 或任何静态文件。
+Deployment reuses `cloudflare.accountId` and `cloudflare.apiToken` directly. The token requires Workers Scripts:Edit and Pages:Edit permissions; no Wrangler login is needed. `BRIDGE_ADMIN_TOKEN` comes from `bridge.deploy.adminToken` and is never written to `wrangler.jsonc`, JavaScript, or any static file.
 
-Pages 项目名由 `bridge.deploy.pagesProjectName` 指定；留空时自动使用 `<bridge.deploy.workerName>-admin`。部署命令会把 `BRIDGE` Service Binding 自动指向本次部署的 Worker。
+The Pages project name is set by `bridge.deploy.pagesProjectName`; if blank, it defaults to `<bridge.deploy.workerName>-admin`. The deployment command automatically points the `BRIDGE` Service Binding to the deployed Worker.
 
-## 本地检查
+## Local Verification
 
-若要同时启动本地 Worker 和 Pages，推荐在项目根目录运行：
+To start both the local Worker and Pages, run this recommended command from the project root:
 
 ```bash
 ./internal/workers/bridge/dev.sh
 ```
 
-以下方式仅用于单独启动管理页面，并通过 Service Binding 联调另一个已经运行的 Worker。
+The following approach starts only the administration interface and connects it through a Service Binding to another Worker that is already running.
 
-仅检查静态页面可直接启动任意静态文件服务器。若要联调 Pages Worker 和远端 Worker，可使用 Wrangler，并提供本地 secret：
+For static-page checks, use any static file server. To test the Pages Worker with a remote Worker, use Wrangler with a local secret:
 
 ```bash
 cd internal/workers/bridge/admin
@@ -49,4 +49,4 @@ printf 'BRIDGE_ADMIN_TOKEN="your-admin-token"\n' > .dev.vars
 npx wrangler@latest pages dev
 ```
 
-`.dev.vars*` 已加入仓库的 `.gitignore`；仍应避免把任何真实 secret 复制到其他受版本控制的文件中。
+`.dev.vars*` is covered by the repository's `.gitignore`; nevertheless, avoid copying real secrets into any other version-controlled file.

@@ -1,62 +1,62 @@
 # Personal CGI Bridge
 
-一个 Bridge 由一个人管理，是连接外部调用方与多台操作系统设备的桥接/转发服务。它把统一的 `method + args` 调用转发给合适的在线设备，只保存调用参数、结果和下载元数据，不代理或保存视频文件。
+A Bridge is a forwarding service managed by one person that connects external callers to multiple operating-system devices. It forwards uniform `method + args` calls to an appropriate online device and stores only call arguments, results, and download metadata. It does not proxy or store video files.
 
-## 概念
+## Concepts
 
-- 一个 Worker 部署就是一个 Bridge，不再在 Worker 内继续划分多个 `bridge.id`。
-- 一台设备指一个操作系统实例：macOS 宿主机是一台；Docker 中的 Linux、虚拟机中的 Windows/Linux 分别是新的设备。
-- 同一操作系统中的多个进程仍属于同一设备，使用同一个稳定的 `deviceId`；新连接会替换该设备的旧连接。
-- 每台设备注册自己可处理的 `methods`。外部调用方只面对一个 CGI 风格的 Bridge 接口，由 `method + args` 表达调用，由 Bridge 选择实际执行设备。
-- 多 Bridge 的发现、授权、检索和路由属于更高层的 Bridge 市场或 Bridge 集合，不属于当前 Worker。
+- One Worker deployment is one Bridge; it is no longer subdivided into multiple `bridge.id` values within a Worker.
+- A device is an operating-system instance: a macOS host is one device; Linux in Docker and Windows/Linux in virtual machines are separate devices.
+- Multiple processes on the same operating system still belong to one device and use the same stable `deviceId`; a new connection replaces that device's previous connection.
+- Each device registers the `methods` it supports. External callers use a single CGI-style Bridge interface, express calls as `method + args`, and let the Bridge select the device that executes them.
+- Discovery, authorization, search, and routing across multiple Bridges belong to a higher-level Bridge marketplace or collection, outside this Worker.
 
 ```text
-外部调用方 ──HTTPS──┐
+External caller ─HTTPS─┐
                     │
-管理员浏览器 ─HTTPS─┼── Personal Bridge Worker ── Durable Object + SQLite
+Admin browser ─HTTPS──┼── Personal Bridge Worker ── Durable Object + SQLite
                     │             │
-macOS 设备 ─────WSS─┤             ├── method: wxchannels.fetch
-Linux 容器 ─────WSS─┘             └── method: download.create
+macOS device ────WSS──┤             ├── method: wxchannels.fetch
+Linux container ─WSS──┘             └── method: download.create
 ```
 
-任务采用至少一次投递：Bridge 分配任务时创建 120 秒租约，执行设备定期续租。连接中断后，租约过期的任务会重新排队；发布方错过 WebSocket 完成通知时，仍可通过任务查询 API 获取持久结果。
+Tasks use at-least-once delivery. The Bridge creates a 120-second lease when assigning a task, and the executing device renews it periodically. After a connection drops, tasks whose leases expire are requeued. If the publisher misses the WebSocket completion notification, it can still retrieve the persisted result through the task query API.
 
-## 部署 Bridge
+## Deploying a Bridge
 
-在 `config.yaml` 中配置 Cloudflare 部署信息：
+Configure the Cloudflare deployment settings in `config.yaml`:
 
 ```yaml
 cloudflare:
   accountId: "<ACCOUNT_ID>"
-  apiToken: "<API_TOKEN>" # Workers Scripts:Edit 和 Pages:Edit
+  apiToken: "<API_TOKEN>" # Workers Scripts:Edit and Pages:Edit
 
 bridge:
   deploy:
     workerName: "dm-bridge"
-    pagesProjectName: "" # 留空时使用 dm-bridge-admin
-    token: "<只供设备使用的随机高强度 Secret>"
-    adminToken: "<与设备 Token 不同的管理员密码>"
+    pagesProjectName: "" # Defaults to dm-bridge-admin when blank
+    token: "<strong-random-device-only-secret>"
+    adminToken: "<admin-password-different-from-device-token>"
 ```
 
-执行：
+Run:
 
 ```bash
 go run . deploy bridge
 ```
 
-命令会部署单个 Durable Object Bridge Worker 和独立的 Cloudflare Pages 管理项目。重复部署会更新代码并保留该 Bridge 的设备登记和任务数据。
+The command deploys a single Durable Object Bridge Worker and a separate Cloudflare Pages administration project. Repeated deployments update the code while preserving the Bridge's device registrations and task data.
 
-- `BRIDGE_TOKEN` 只用于设备连接和设备自身发布调用，不应分发给外部调用者。
-- `BRIDGE_ADMIN_TOKEN` 只用于管理页面、管理 API 和调用 Token 管理。
-- 外部调用使用管理员在 Bridge 中动态创建的独立调用 Token。
-- `/health` 不需要认证。
-- `/v1/connect` 需要设备 `BRIDGE_TOKEN` 和设备身份 header。
-- 其他 `/v1/*` 接口接受动态调用 Token；设备程序也可使用自己的设备 Secret。
-- `/admin/api/*` 需要管理员认证。
+- `BRIDGE_TOKEN` is only for device connections and calls published by devices themselves. Do not distribute it to external callers.
+- `BRIDGE_ADMIN_TOKEN` is only for the administration interface, administration API, and call-token management.
+- External calls use separate call tokens created dynamically by the administrator in the Bridge.
+- `/health` requires no authentication.
+- `/v1/connect` requires the device's `BRIDGE_TOKEN` and device-identity headers.
+- Other `/v1/*` endpoints accept dynamic call tokens; device programs can also use their device secret.
+- `/admin/api/*` requires administrator authentication.
 
-## 注册操作系统设备
+## Registering Operating-System Devices
 
-每个操作系统使用一份单 Bridge 配置：
+Each operating system uses a configuration for a single Bridge:
 
 ```yaml
 bridge:
@@ -69,13 +69,13 @@ bridge:
   methods: "auto"
 ```
 
-`deviceId` 在当前 Bridge 内必须唯一且保持稳定。留空时程序使用系统主机名；生产环境建议显式设置。`deviceName` 是管理页显示名称，留空时同样使用主机名。操作系统类型与当前程序实际注册的方法由程序自动上报。
+`deviceId` must be unique and stable within the Bridge. If left blank, the program uses the system hostname; set it explicitly in production. `deviceName` is the name displayed in the administration interface and also defaults to the hostname. The program automatically reports the operating-system type and the methods it has registered.
 
-`methods` 是通用方法白名单，不再为每项能力增加布尔配置：`auto` 发布当前程序全部已注册方法，`none` 只允许该设备发布调用而不执行远程调用，也可填写 `wxchannels.fetch,wxchannels.contact.feed.list,download.create` 这样的逗号分隔列表。
+`methods` is a general method allowlist rather than separate boolean settings for each capability. `auto` exposes all methods registered by the current program; `none` lets the device publish calls without executing remote calls. You can also provide a comma-separated list such as `wxchannels.fetch,wxchannels.contact.feed.list,download.create`.
 
-视频号 adapter 当前会注册以下 Bridge 方法：
+The WeChat Channels adapter currently registers these Bridge methods:
 
-| method | args | 对应 scraper 方法 |
+| method | args | Corresponding scraper method |
 | --- | --- | --- |
 | `wxchannels.contact.search` | `keyword`, `next_marker` | `SearchChannelsContact` |
 | `wxchannels.contact.feed.list` | `username`, `next_marker` | `FetchChannelsFeedListOfContact` |
@@ -84,17 +84,17 @@ bridge:
 | `wxchannels.feed.comment.list` | `oid`, `nid`, `comment_id`, `next_marker` | `FetchChannelsFeedCommentList` |
 | `wxchannels.feed.share_url` | `oid` | `FetchChannelsFeedShareUrl` |
 
-这些方法依赖设备上的视频号页面 WebSocket 连接；设备连接 Bridge 但视频号页面未连接时，调用会失败或超时。
+These methods depend on the WebSocket connection from the WeChat Channels page on the device. Calls fail or time out if the device is connected to the Bridge but the Channels page is not connected.
 
-公众号 adapter 当前会注册以下 Bridge 方法：
+The WeChat Official Accounts adapter currently registers these Bridge methods:
 
-| method | args | 对应 scraper 方法 |
+| method | args | Corresponding scraper method |
 | --- | --- | --- |
 | `wxmp.biz.msg.list` | `username`, `offset` | `FetchBizMsgList` |
 
-该方法依赖设备上的公众号页面 WebSocket 连接。`username` 必填，`offset` 可省略或传上一页返回的偏移量。
+This method depends on the WebSocket connection from the WeChat Official Accounts page on the device. `username` is required; `offset` may be omitted or set to the offset returned by the previous page.
 
-Docker 中的 Linux 使用独立身份：
+Linux running in Docker uses a separate identity:
 
 ```yaml
 bridge:
@@ -107,41 +107,41 @@ bridge:
   methods: "download.create"
 ```
 
-本地状态接口：
+Local status endpoint:
 
 ```http
 GET /api/bridge/status
 ```
 
-返回当前操作系统设备到个人 Bridge 的唯一连接状态，不再接受 `?bridge=` 选择参数。
+Returns the status of the current operating-system device's single connection to its personal Bridge. The `?bridge=` selection parameter is no longer accepted.
 
-## 管理页面
+## Administration Interface
 
-管理页源码位于 `internal/workers/bridge/admin`：
+The administration interface source is in `internal/workers/bridge/admin`:
 
-- `public/index.html`、`style.css`、`app.js` 是静态源码；
-- `build.sh` 生成被 Git 忽略的 `dist`，并从 `frontend/public/timeless` 复制共享运行时；
-- `worker.js` 负责 HTTP Basic Auth 和 `/admin/api/*` Service Binding 转发。
+- `public/index.html`, `style.css`, and `app.js` are the static source files;
+- `build.sh` generates the Git-ignored `dist` directory and copies the shared runtime from `frontend/public/timeless`;
+- `worker.js` handles HTTP Basic Auth and Service Binding forwarding for `/admin/api/*`.
 
-浏览器登录：
+Browser login:
 
-- 用户名：`admin`
-- 密码：`bridge.deploy.adminToken`
+- Username: `admin`
+- Password: `bridge.deploy.adminToken`
 
-管理页每 5 秒刷新，展示操作系统设备。每张设备卡片都有“日志”按钮，可在右侧抽屉查看该设备最近 7 天的连接、断开、连接心跳、调用下发、设备接收、任务心跳、成功响应、失败重试、租约超时和管理员重置等事件。日志支持分类筛选、自动刷新、向前分页，并可展开查看调用参数或响应数据；Token、Cookie、Authorization、Password、Secret 等敏感字段会在落库前自动脱敏，单条超大详情会截断。
+The administration interface refreshes every five seconds and displays operating-system devices. Each device card has a “日志” (“Logs”) button that opens a right-hand drawer showing the last seven days of events, including connections, disconnections, connection heartbeats, call dispatch, device receipt, task heartbeats, successful responses, retries after failure, lease expiry, and administrator resets. Logs support category filters, automatic refresh, pagination into older entries, and expandable call arguments or response data. Sensitive fields such as Token, Cookie, Authorization, Password, and Secret are automatically redacted before storage, and oversized entry details are truncated.
 
-管理页也通过右侧抽屉添加和管理调用 Token。管理员可以创建独立 Token、设置初始积分、充值积分、选择 1/7/30/90 天或永久有效、让 Token 立即过期以及移除 Token。Token 可留空由 Bridge 自动生成，也可手动指定；用途或使用人可选填。Token 明文只在创建成功时显示一次，Bridge 仅保存 SHA-256 摘要。
+Call tokens are also added and managed through the right-hand drawer. Administrators can create separate tokens, set initial credits, add credits, choose validity periods of 1/7/30/90 days or no expiry, expire tokens immediately, and remove tokens. Leave the token blank for the Bridge to generate it automatically, or specify it manually. The purpose or user is optional. The plaintext token is displayed only once after successful creation; the Bridge stores only its SHA-256 digest.
 
-每个调用 Token 都是独立发布方：它只能列出和查询自己创建的调用，不能读取其他 Token 或设备发布的任务。Token 过期或移除后，新请求立即返回 `401`；已经分配给设备的调用仍会继续执行。
+Each call token is a separate publisher. It can list and query only calls it created, and cannot read tasks published by other tokens or devices. Once a token expires or is removed, new requests immediately return `401`; calls already assigned to devices continue executing.
 
-管理 API：
+Administration API:
 
 ```bash
 curl -H 'Authorization: Bearer <BRIDGE_ADMIN_TOKEN>' \
   'https://dm-bridge.<account>.workers.dev/admin/api/overview'
 ```
 
-overview 返回：
+The overview response contains:
 
 ```json
 {
@@ -153,7 +153,7 @@ overview 返回：
 }
 ```
 
-管理 API 也支持直接维护调用 Token：
+The administration API also supports direct call-token management:
 
 ```http
 GET /admin/api/access-tokens
@@ -166,9 +166,9 @@ GET /admin/api/devices/:device_id/logs?category=&before_id=&limit=
 Authorization: Bearer <BRIDGE_ADMIN_TOKEN>
 ```
 
-设备日志 `category` 可选 `connection`、`heartbeat`、`call`、`response`、`system`；`limit` 范围为 1–500，使用响应中的 `next_before_id` 继续读取更早日志。
+Device-log `category` can be `connection`, `heartbeat`, `call`, `response`, or `system`. `limit` ranges from 1–500; use `next_before_id` from the response to retrieve older logs.
 
-创建请求：
+Creation request:
 
 ```json
 {
@@ -179,9 +179,9 @@ Authorization: Bearer <BRIDGE_ADMIN_TOKEN>
 }
 ```
 
-`token` 留空或省略时由 Bridge 自动生成；自定义值必须为 16–256 位，只能包含字母、数字和 `._~+/=-`。`name` 可留空，`expires_in_seconds` 为 `null` 时永不过期，`credits` 是非负整数且默认为 `0`。创建响应中的 `token` 是唯一一次返回的明文。
+The Bridge generates `token` automatically when it is blank or omitted. Custom values must be 16–256 characters long and contain only letters, numbers, and `._~+/=-`. `name` may be blank; `expires_in_seconds` set to `null` means no expiry; `credits` is a non-negative integer defaulting to `0`. The creation response is the only time `token` is returned in plaintext.
 
-充值请求中的 `amount` 是积分增量。管理 API 允许负数调整以修正账目，但调整后余额不能小于 `0`；管理页只提供正数充值：
+`amount` in a credit-adjustment request is the change in credits. The administration API permits negative adjustments to correct the ledger, but the resulting balance cannot fall below `0`. The administration interface only supports adding positive amounts:
 
 ```json
 {
@@ -190,19 +190,19 @@ Authorization: Bearer <BRIDGE_ADMIN_TOKEN>
 }
 ```
 
-每次变动都会写入永久积分流水，包含 Token、关联任务、变动值、变动后余额、method、原因和时间。移除 Token 使用软撤销，因此不会破坏历史流水。
+Every change is recorded in a permanent credit ledger with the token, associated task, adjustment, resulting balance, method, reason, and timestamp. Removing a token uses soft revocation, preserving historical records.
 
-每张设备卡片在设备注册 `wxchannels.fetch` 时提供定向方法调用测试。获取成功后，可以把结果作为 `args` 提交给任意在线且注册 `download.create` 的设备。两个操作都调用同一个 `/admin/api/call` 接口。
+When a device registers `wxchannels.fetch`, its card offers a targeted method-call test. After a successful fetch, the result can be submitted as `args` to any online device that has registered `download.create`. Both operations use the same `/admin/api/call` endpoint.
 
-## 本地开发
+## Local Development
 
 ```bash
 ./internal/workers/bridge/dev.sh
 ```
 
-Worker 默认监听 `http://127.0.0.1:8787`，Pages 默认监听 `http://127.0.0.1:8788`。管理页用户名为 `admin`，默认本地密码为 `local-bridge-admin-token`。
+The Worker listens on `http://127.0.0.1:8787` by default, and Pages on `http://127.0.0.1:8788`. The administration username is `admin`, and the default local password is `local-bridge-admin-token`.
 
-可以覆盖端口和 Token：
+You can override the ports and tokens:
 
 ```bash
 BRIDGE_WORKER_PORT=8797 \
@@ -213,9 +213,9 @@ WRANGLER_VERSION=latest \
 ./internal/workers/bridge/dev.sh
 ```
 
-## 设备之间调用方法
+## Calling Methods Between Devices
 
-本地 API 提供统一入口：
+The local API provides a unified endpoint:
 
 ```http
 POST /api/bridge/call
@@ -231,11 +231,11 @@ Content-Type: application/json
 }
 ```
 
-`target_device_id` 可省略，此时 Bridge 从在线、空闲且注册了该 `method` 的设备中选择一个执行。增加新方法时，只需要设备端注册处理函数，不需要修改 Bridge 的任务类型定义。
+`target_device_id` is optional. If omitted, the Bridge selects an online, idle device that has registered the requested `method`. Adding a method only requires registering its handler on the device; the Bridge's task-type definitions do not need to change.
 
-现有业务接口是统一调用的便捷适配层。例如，设备 A 可以把视频号解析交给设备 B：
+Existing application endpoints are convenient adapters for the unified call interface. For example, device A can delegate WeChat Channels parsing to device B:
 
-设备 A 可以把视频号解析交给设备 B：
+Device A can delegate WeChat Channels parsing to device B:
 
 ```http
 POST /api/bridge/tasks/wxchannels
@@ -253,9 +253,9 @@ Content-Type: application/json
 }
 ```
 
-省略 `target_device_id` 时，Bridge 自动选择在线、空闲且注册了 `wxchannels.fetch` 的设备。
+When `target_device_id` is omitted, the Bridge automatically selects an online, idle device that has registered `wxchannels.fetch`.
 
-向指定设备创建下载任务：
+Create a download task on a specific device:
 
 ```http
 POST /api/bridge/tasks/download
@@ -274,27 +274,27 @@ Content-Type: application/json
 }
 ```
 
-## Bridge 对外 CGI 接口
+## External CGI Interface
 
-面向使用者的完整接入流程、任务状态说明和多语言代码示例见 [`docs/feature/bridge.md`](../../../docs/feature/bridge.md)。
+For the complete user-facing integration flow, task-status descriptions, and code examples in multiple languages, see [`docs/feature/bridge.md`](../../../docs/feature/bridge.md).
 
-外部系统可以把整个 Bridge 当作一个 CGI 节点。查询在线设备和方法：
+External systems can treat the whole Bridge as a CGI node. Query online devices and methods:
 
 ```http
 GET /v1
 Authorization: Bearer <CALL_TOKEN>
 ```
 
-查询当前 Token 的积分：
+Query the current token's credits:
 
 ```http
 GET /v1/credits
 Authorization: Bearer <CALL_TOKEN>
 ```
 
-外部 Token 每创建一个同步或异步调用消耗 `1` 积分。扣费与任务创建位于同一个 SQLite 事务；余额不足返回 `402 Payment Required`，无效请求不扣费，相同 `idempotency_key` 的异步重放不重复扣费。任务一旦创建，设备执行失败、内部重试或 `/v1/invoke` 超时均不退分。设备 Secret 与管理员控制台调用不计费。
+Each synchronous or asynchronous call created with an external token costs `1` credit. Credit deduction and task creation occur in the same SQLite transaction. Insufficient balance returns `402 Payment Required`; invalid requests are not charged, and asynchronous replays with the same `idempotency_key` are not charged again. Once a task is created, credits are not refunded for device execution failures, internal retries, or `/v1/invoke` timeouts. Calls using device secrets or the administrator console are not charged.
 
-同步调用并直接获得方法结果：
+Make a synchronous call and receive the method result directly:
 
 ```http
 POST /v1/invoke
@@ -311,9 +311,9 @@ Content-Type: application/json
 }
 ```
 
-`/v1/invoke` 不需要 `idempotency_key`，不返回任务信息，最多等待 10 秒。成功时响应体就是设备方法返回的 JSON；执行失败返回 `502`，超时返回 `504`。超时不会取消内部任务，因此有副作用或可能超过 10 秒的调用应使用异步接口。
+`/v1/invoke` requires no `idempotency_key`, returns no task information, and waits up to 10 seconds. On success, its response body is the JSON returned by the device method. Execution failures return `502`; timeouts return `504`. A timeout does not cancel the internal task, so use the asynchronous interface for calls with side effects or calls that may take longer than 10 seconds.
 
-创建异步任务：
+Create an asynchronous task:
 
 ```http
 POST /v1/call
@@ -329,7 +329,7 @@ Content-Type: application/json
 }
 ```
 
-异步获取某个视频号账号的视频列表：
+Asynchronously fetch the video list for a WeChat Channels account:
 
 ```http
 POST /v1/call
@@ -346,47 +346,47 @@ Content-Type: application/json
 }
 ```
 
-不指定 `target_device_id` 时，外部调用方只依赖 Bridge 提供的方法，不需要了解内部设备。指定时，Bridge 会确认目标设备在线并注册了该方法后再调度。
+Without `target_device_id`, external callers depend only on methods exposed by the Bridge and do not need to know its internal devices. When a target is specified, the Bridge verifies that it is online and has registered the method before scheduling the call.
 
-提交响应中的任务 ID 可以继续使用同一个调用 Token 查询：
+Use the task ID from the submission response and the same call token to query the task:
 
 ```http
 GET /v1/tasks/<task-id>
 Authorization: Bearer <CALL_TOKEN>
 ```
 
-`GET /v1/tasks` 也只返回当前调用 Token 发布的任务。调用方不能通过 query 或 header 改写自己的发布方身份。
+`GET /v1/tasks` also returns only tasks published by the current call token. Callers cannot override their publisher identity through query parameters or headers.
 
-## 本地 API
+## Local API
 
-| 方法 | 路径 | 用途 |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/bridge/status` | 当前设备到个人 Bridge 的连接状态 |
-| `POST` | `/api/bridge/call` | 使用 `method + args` 提交任意方法调用 |
-| `POST` | `/api/bridge/tasks/wxchannels` | 提交视频号解析任务 |
-| `POST` | `/api/bridge/tasks/download` | 向指定设备提交下载任务 |
-| `GET` | `/api/bridge/tasks/:id` | 查询任务、content/result 和错误 |
-| `GET` | `/api/bridge/tasks?status=&limit=` | 查询当前设备发布的任务 |
+| `GET` | `/api/bridge/status` | Connection status between the current device and its personal Bridge |
+| `POST` | `/api/bridge/call` | Submit any method call using `method + args` |
+| `POST` | `/api/bridge/tasks/wxchannels` | Submit a WeChat Channels parsing task |
+| `POST` | `/api/bridge/tasks/download` | Submit a download task to a specific device |
+| `GET` | `/api/bridge/tasks/:id` | Query a task, its content/result, and errors |
+| `GET` | `/api/bridge/tasks?status=&limit=` | Query tasks published by the current device |
 
-## 旧配置迁移
+## Migrating Legacy Configurations
 
-升级后，旧外部调用方不应继续使用共享 `BRIDGE_TOKEN`。请先用 `BRIDGE_ADMIN_TOKEN` 登录管理页，为每个调用方创建独立调用 Token，再替换其 `Authorization`。设备配置中的 `bridge.token` 保持不变。
+After upgrading, legacy external callers should stop using the shared `BRIDGE_TOKEN`. First log in to the administration interface with `BRIDGE_ADMIN_TOKEN`, create a separate call token for each caller, and replace its `Authorization` value. Leave `bridge.token` in device configurations unchanged.
 
-从不含积分字段的版本升级时，已有动态调用 Token 会保留，但初始积分余额为 `0`。升级部署后应先在管理页为这些 Token 充值，再恢复外部调用；任务和 Token 的既有身份不会改变。
+When upgrading from a version without credit fields, existing dynamic call tokens are retained with an initial balance of `0`. After deploying the upgrade, add credits to these tokens in the administration interface before resuming external calls. Existing task and token identities remain unchanged.
 
-旧版只有一个 `bridge.instances` 项时仍可临时连接，新版会使用其中的 `url`、`clientId` 和 token，并保留旧路径与旧协议字段兼容。旧 `capabilities` 布尔值会在迁移期映射为对应 methods；新配置请使用通用的 `bridge.methods`。请迁移为新的 `bridge.url`、`bridge.deviceId`、`bridge.deviceName` 和 `bridge.token`。
+A legacy configuration with exactly one `bridge.instances` entry can still connect temporarily. The new version uses its `url`, `clientId`, and token, while retaining compatibility with legacy paths and protocol fields. During migration, legacy `capabilities` booleans map to the corresponding methods; new configurations should use the general `bridge.methods` setting. Migrate to `bridge.url`, `bridge.deviceId`, `bridge.deviceName`, and `bridge.token`.
 
-旧配置包含多个实例时会直接报错，因为单个操作系统设备现在只属于一个个人 Bridge；多 Bridge 管理由更高层应用负责。
+Legacy configurations with multiple instances fail immediately because each operating-system device now belongs to one personal Bridge. Higher-level applications handle multi-Bridge management.
 
-从旧版多 `bridge.id` Worker 第一次升级时会启用新的单例 Durable Object。设备会在重连后重新登记，但旧 Durable Object 中的历史任务不会自动合并到新 Bridge。
+The first upgrade from a legacy multi-`bridge.id` Worker activates a new singleton Durable Object. Devices re-register after reconnecting, but historical tasks from old Durable Objects are not automatically merged into the new Bridge.
 
-## 可靠性和限制
+## Reliability and Limitations
 
-- 相同发布方和 `idempotency_key` 只创建一个任务。
-- 每个外部调用任务固定消耗 1 积分；余额不足返回 `402`，查询和轮询不消耗积分。
-- 每台设备当前一次领取一个任务；同一操作系统内的视频号解析串行执行。
-- 单次调用的 args 或 result 上限为 1 MiB。
-- 完成和失败任务保留 7 天。
-- 任务可能因租约过期再次执行，执行端必须允许重复调用。
-- `BRIDGE_TOKEN` 是所有设备共享的高权限 Secret，只应写入设备配置；面向人员和外部系统必须分发独立调用 Token。
-- 动态调用 Token 当前拥有全部在线 `methods` 的调用权限；更细粒度的方法授权和限流仍属于后续的 Bridge 市场或上层网关。
+- Only one task is created for the same publisher and `idempotency_key`.
+- Each external call task costs one credit. Insufficient balance returns `402`; queries and polling do not consume credits.
+- Each device currently takes one task at a time. WeChat Channels parsing runs sequentially within the same operating system.
+- Each call's args or result is limited to 1 MiB.
+- Completed and failed tasks are retained for seven days.
+- Tasks may execute again after lease expiry; executors must tolerate duplicate calls.
+- `BRIDGE_TOKEN` is a high-privilege secret shared by all devices and belongs only in device configuration. Distribute separate call tokens to people and external systems.
+- Dynamic call tokens can currently invoke all online `methods`. Finer-grained method authorization and rate limiting remain the responsibility of a future Bridge marketplace or higher-level gateway.
